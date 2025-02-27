@@ -1,5 +1,5 @@
 {
-  "name": "solidgate/php-sdk",
+  "name": "zenabel/php-sdk",
   "description": "Php API SDK for SolidGate payment gateway",
   "type": "library",
   "require": {

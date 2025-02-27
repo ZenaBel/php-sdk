@@ -5,7 +5,6 @@ use GuzzleHttp\Psr7\Request;
 use SolidGate\API\DTO\FormInitDTO;
 use SolidGate\API\DTO\FormUpdateDTO;
 use SolidGate\API\DTO\FormResignDTO;
-use SolidGate\API\DTO\MerchantData;
 use Throwable;
 
 class Api
@@ -13,6 +12,9 @@ class Api
     const BASE_SOLID_GATE_API_URI = 'https://pay.solidgate.com/api/v1/';
     const BASE_RECONCILIATION_API_URI = 'https://reports.solidgate.com/';
 
+    const BASE_SOLID_SUBSCRIBE_GATE_API_URI = 'https://subscriptions.solidgate.com/api/v1/';
+
+    const BASE_GATE_API_URI = 'https://gate.solidgate.com/api/v1/';
     const RECONCILIATION_ORDERS_PATH = 'api/v2/reconciliation/orders';
     const RECONCILIATION_CHARGEBACKS_PATH = 'api/v2/reconciliation/chargebacks';
     const RECONCILIATION_ALERTS_PATH = 'api/v2/reconciliation/chargeback-alerts';
@@ -20,6 +22,8 @@ class Api
 
     protected $solidGateApiClient;
     protected $reconciliationsApiClient;
+    protected $solidSubscribeGateApiClient;
+    protected $gateApiClient;
 
     protected $publicKey;
     protected $secretKey;
@@ -29,7 +33,9 @@ class Api
         string $publicKey,
         string $secretKey,
         string $baseSolidGateApiUri = self::BASE_SOLID_GATE_API_URI,
-        string $baseReconciliationsApiUri = self::BASE_RECONCILIATION_API_URI
+        string $baseReconciliationsApiUri = self::BASE_RECONCILIATION_API_URI,
+        string $baseSolidSubscribeGateApiUri = self::BASE_SOLID_SUBSCRIBE_GATE_API_URI,
+        string $baseGateApiUri = self::BASE_GATE_API_URI
     ) {
         $this->publicKey = $publicKey;
         $this->secretKey = $secretKey;
@@ -47,6 +53,113 @@ class Api
                 'verify'   => true,
             ]
         );
+
+        $this->solidSubscribeGateApiClient = new HttpClient(
+            [
+                'base_uri' => $baseSolidSubscribeGateApiUri,
+                'verify'   => true,
+            ]
+        );
+        $this->gateApiClient = new HttpClient(
+            [
+                'base_uri' => $baseGateApiUri,
+                'verify'   => true,
+            ]
+        );
+    }
+
+    public function addProduct(array $attributes): string
+    {
+        return $this->sendRequestPOST('products', $attributes);
+    }
+
+    public function getProducts(array $attributes = []): string
+    {
+        $path = 'products?' . http_build_query($attributes);
+
+        return $this->sendRequestGET($path, []);
+    }
+
+    public function updateProduct(string $productId, array $attributes): string
+    {
+        return $this->sendRequestPATCH('products/' . $productId, $attributes);
+    }
+
+    public function addPrice(string $productId, array $attributes): string
+    {
+        return $this->sendRequestPOST('products/' . $productId . '/prices', $attributes);
+    }
+
+    public function getPrices(string $productId, array $attributes = []): string
+    {
+        $path = 'products/' . $productId . '/prices?' . http_build_query($attributes);
+
+        return $this->sendRequestGET($path, []);
+    }
+
+    public function updatePrice(string $productId, string $priceId, array $attributes): string
+    {
+        return $this->sendRequestPATCH('products/' . $productId . '/prices/' . $priceId, $attributes);
+    }
+
+    public function cancelSubscription(array $attributes): string
+    {
+        return $this->sendRequestPOST('subscription/cancel', $attributes);
+    }
+
+    public function getSubscriptionStatus(array $attributes): string
+    {
+        return $this->sendRequestPOST('subscription/status', $attributes);
+    }
+
+    public function pauseSchedule(string $subscription_id, array $attributes): string
+    {
+        return $this->sendRequestPOST("subscriptions/$subscription_id/pause-schedule", $attributes);
+    }
+
+    public function updatePauseSchedule(string $subscription_id, array $attributes): string
+    {
+        return $this->sendRequestPATCH("subscriptions/$subscription_id/pause-schedule", $attributes);
+    }
+
+    public function removePauseSchedule(string $subscription_id): string
+    {
+        return $this->sendRequestDELETE("subscriptions/$subscription_id/pause-schedule");
+    }
+
+    public function getProduct($product_uuid): string
+    {
+        return $this->sendRequestGET('products/' . $product_uuid, []);
+    }
+
+    public function switchProductSubscription(array $data): string
+    {
+        return $this->sendRequestPOST('subscription/switch-subscription-product', $data);
+    }
+
+    public function createPrice($product_uuid, array $data): string
+    {
+        return $this->sendRequestPOST("products/$product_uuid/prices", $data);
+    }
+
+    public function getProductPrices($uuid): string
+    {
+        return $this->sendRequestGET("products/$uuid/prices", []);
+    }
+
+    public function calculatePrice(array $data): string
+    {
+        return $this->sendRequestPOST('products/calculatePrice', $data);
+    }
+
+    public function reactivateSubscription(array $attributes): string
+    {
+        return $this->sendRequestPOST("subscription/restore", $attributes);
+    }
+
+    public function updateToken(array $data): string
+    {
+        return $this->sendRequestPOST('subscription/update-token', $data);
     }
 
     public function charge(array $attributes): string
@@ -174,7 +287,7 @@ class Api
 
     public function sendRequest(string $method, array $attributes): string
     {
-        $request = $this->makeRequest($method, $attributes);
+        $request = $this->makeRequestPOST($method, $attributes);
 
         try {
             $response = $this->solidGateApiClient->send($request);
@@ -214,7 +327,7 @@ class Api
                 $attributes['next_page_iterator'] = $nextPageIterator;
             }
 
-            $request = $this->makeRequest($url, $attributes);
+            $request = $this->makeRequestPOST($url, $attributes);
             try {
                 $responseArray = $this->sendReconciliationsRequestInternal($request, $maxAttempts);
                 $nextPageIterator = ($responseArray['metadata'] ?? [])['next_page_iterator'] ?? null;
@@ -264,7 +377,7 @@ class Api
         return $this->base64UrlEncode($iv . $encrypt);
     }
 
-    protected function makeRequest(string $path, array $attributes): Request
+    protected function makeRequestPOST(string $path, array $attributes): Request
     {
         $body = json_encode($attributes);
 
@@ -276,5 +389,141 @@ class Api
         ];
 
         return new Request('POST', $path, $headers, $body);
+    }
+
+    protected function makeRequestGET(string $path, array $attributes): Request
+    {
+        $body = json_encode($attributes);
+
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Accept'       => 'application/json',
+            'Merchant'     => $this->getPublicKey(),
+            'Signature'    => $this->generateSignature($body),
+        ];
+
+        return new Request('GET', $path, $headers, $body);
+    }
+
+    protected function makeRequestPATCH(string $path, array $attributes): Request
+    {
+        $body = json_encode($attributes);
+
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Accept'       => 'application/json',
+            'Merchant'     => $this->getPublicKey(),
+            'Signature'    => $this->generateSignature($body),
+        ];
+
+        return new Request('PATCH', $path, $headers, $body);
+    }
+
+    protected function makeRequestDELETE(string $path, array $attributes): Request
+    {
+        $body = json_encode($attributes);
+
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Accept'       => 'application/json',
+            'Merchant'     => $this->getPublicKey(),
+            'Signature'    => $this->generateSignature($body),
+        ];
+
+        return new Request('DELETE', $path, $headers, $body);
+    }
+
+    protected function makeRequestGATE(string $path, array $attributes): Request
+    {
+        $body = json_encode($attributes);
+
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Accept'       => 'application/json',
+            'Merchant'     => $this->getPublicKey(),
+            'Signature'    => $this->generateSignature($body),
+        ];
+
+        return new Request('POST', $path, $headers, $body);
+    }
+
+    protected function sendRequestGATE(string $string, array $attributes = []): string
+    {
+        $request = $this->makeRequestGATE($string, $attributes);
+
+        try {
+            $response = $this->solidGateApiClient->send($request);
+
+            return $response->getBody()->getContents();
+        } catch (Throwable $e) {
+            $this->exception = $e;
+        }
+
+        return '';
+    }
+
+    public function checkOrderStatus(array $data): string
+    {
+        return $this->sendRequestGATE('status', $data);
+    }
+
+    public function sendRequestPOST(string $method, array $attributes): string
+    {
+        $request = $this->makeRequestPOST($method, $attributes);
+
+        try {
+            $response = $this->solidSubscribeGateApiClient->send($request);
+
+            return $response->getBody()->getContents();
+        } catch (Throwable $e) {
+            $this->exception = $e;
+        }
+
+        return '';
+    }
+
+    public function sendRequestGET(string $method, array $attributes): string
+    {
+        $request = $this->makeRequestGET($method, $attributes);
+
+        try {
+            $response = $this->solidSubscribeGateApiClient->send($request);
+
+            return $response->getBody()->getContents();
+        } catch (Throwable $e) {
+            $this->exception = $e;
+        }
+
+        return '';
+    }
+
+    public function sendRequestPATCH(string $string, array $attributes): string
+    {
+        $request = $this->makeRequestPATCH($string, $attributes);
+
+        try {
+            $response = $this->solidSubscribeGateApiClient->send($request);
+
+            return $response->getBody()->getContents();
+        } catch (Throwable $e) {
+            $this->exception = $e;
+        }
+
+        return '';
+    }
+
+    public function sendRequestDELETE(string $string, array $attributes = []): string
+    {
+        $request = $this->makeRequestDELETE($string, $attributes);
+
+        try {
+            $response = $this->solidSubscribeGateApiClient->send($request);
+
+            return $response->getBody()->getContents();
+        } catch (Throwable $e) {
+            $this->exception = $e;
+        }
+
+        return '';
     }
 }
